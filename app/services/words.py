@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from ..db import get_session
-from ..models import Word
+from ..models import DictionaryWord, DailyOverride
 from ..schemas import UploadWordsResult, WordOut
 from ..config import settings
 

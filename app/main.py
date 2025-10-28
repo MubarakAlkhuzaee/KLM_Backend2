@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .routers import auth, users, daily, battlepass, teams
 from .db import engine
-from .models import Base
+
 
 app = FastAPI(title="Arabic Wordle Backend")
 
