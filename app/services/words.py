@@ -5,7 +5,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from ..db import get_session
 from ..models import DictionaryWord, DailyOverride
-from ..schemas import UploadWordsResult, WordOut
 from ..config import settings
 
 router = APIRouter(prefix="/words", tags=["words"])
