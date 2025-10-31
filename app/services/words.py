@@ -1,52 +1,60 @@
-import io, json, math
-from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Header
-from sqlalchemy.ext.asyncio import AsyncSession
+import json
+from pathlib import Path
+from datetime import datetime, date
+from zoneinfo import ZoneInfo
 from sqlalchemy import select
-from ..db import get_session
+from sqlalchemy.ext.asyncio import AsyncSession
 from ..models import DictionaryWord, DailyOverride
 from ..config import settings
 
-router = APIRouter(prefix="/words", tags=["words"])
+_WORDS_CACHE: list[dict] | None = None
+_WORDS_PATH = Path(__file__).parent.parent / "data" / "arabic_100_with_roots_with_source.json"
 
-@router.post("/upload", response_model=UploadWordsResult)
-async def upload_words(
-    admin_key: str = Header(None, convert_underscores=False),
-    file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_session)
-):
-    if admin_key != settings.ADMIN_UPLOAD_KEY:
-        raise HTTPException(401, "Invalid admin key")
-    raw = (await file.read()).decode("utf-8")
-    data = json.loads(raw)
-    # Expect list of { "word": "...", "definition": "...", "source": "..."? }
-    if not isinstance(data, list):
-        raise HTTPException(400, "Expected a JSON list")
+def _load_words_file() -> list[dict]:
+    global _WORDS_CACHE
+    if _WORDS_CACHE is None:
+        raw = _WORDS_PATH.read_text(encoding="utf-8")
+        data = json.loads(raw)
+        # Normalize to {word, definition, meta}
+        normalized = []
+        for item in data:
+            normalized.append({
+                "word": item.get("word"),
+                "definition": item.get("definition"),
+                "meta": {"root": item.get("root"), "source": item.get("source")},
+            })
+        _WORDS_CACHE = normalized
+    return _WORDS_CACHE
 
-    inserted = 0
-    for item in data:
-        w = Word(word=item["word"], definition=item["definition"], source=item.get("source"))
-        db.add(w)
-        inserted += 1
-    await db.commit()
-    return UploadWordsResult(inserted=inserted)
+def _riyadh_date(d: date | None = None) -> date:
+    if d is not None:
+        return d
+    tz = ZoneInfo(settings.TIMEZONE)
+    return datetime.now(tz).date()
 
-def _days_since_start(utc_today: datetime) -> int:
-    # settings.WOD_START_DATE is YYYY-MM-DD
-    start = datetime.fromisoformat(settings.WOD_START_DATE).replace(tzinfo=timezone.utc)
-    delta = utc_today.date() - start.date()
-    return delta.days if delta.days >= 0 else 0
+def _index_for_date(d: date, total: int) -> int:
+    # Deterministic rotation from a fixed epoch
+    epoch = date(2025, 1, 1)
+    return ((d - epoch).days) % total
 
-@router.get("/daily", response_model=WordOut)
-async def daily_word(db: AsyncSession = Depends(get_session)):
-    res = await db.execute(select(Word.id))
-    ids = [r[0] for r in res.all()]
-    if not ids:
-        raise HTTPException(404, "No words uploaded")
-    ids.sort()
-    idx = _days_since_start(datetime.now(timezone.utc)) % len(ids)
-    word_id = ids[idx]
+async def get_daily_word(db: AsyncSession, for_date: date | None = None):
+    d = _riyadh_date(for_date)
+    # Overrides take precedence
+    ov = await db.execute(select(DailyOverride).where(DailyOverride.date_key == d.isoformat()))
+    override = ov.scalar_one_or_none()
+    if override:
+        w = await db.get(DictionaryWord, override.dictionary_word_id)
+        return d.isoformat(), -1, w
 
-    res = await db.execute(select(Word).where(Word.id == word_id))
-    w = res.scalar_one()
-    return WordOut(id=w.id, word=w.word, definition=w.definition, source=w.source)
+    # Try DB words first
+    all_ids_res = await db.execute(select(DictionaryWord.id))
+    ids = [row[0] for row in all_ids_res.all()]
+    if ids:
+        idx = _index_for_date(d, len(ids))
+        w = await db.get(DictionaryWord, ids[idx])
+        return d.isoformat(), idx, w
+
+    # Fallback to bundled JSON
+    words = _load_words_file()
+    idx = _index_for_date(d, len(words))
+    return d.isoformat(), idx, words[idx]

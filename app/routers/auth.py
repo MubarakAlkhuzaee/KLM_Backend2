@@ -26,6 +26,12 @@ async def register(data: RegisterIn, db: AsyncSession = Depends(get_session)):
         if not team:
             raise HTTPException(400, "Invalid team code")
         team_id = team.id
+    else:
+        # auto-assign a random team
+        teams = (await db.execute(select(Team))).scalars().all()
+        if teams:
+            import random
+            team_id = random.choice(teams).id
 
     user = User(
         email=data.email,
@@ -90,7 +96,13 @@ async def google_callback(request: Request, db: AsyncSession = Depends(get_sessi
             if not user.display_name:
                 user.display_name = display_name
         else:
-            user = User(email=email, hashed_password=None, google_sub=sub, display_name=display_name)
+            # auto-assign team on first OAuth sign-in
+            team_id = None
+            teams = (await db.execute(select(Team))).scalars().all()
+            if teams:
+                import random
+                team_id = random.choice(teams).id
+            user = User(email=email, hashed_password=None, google_sub=sub, display_name=display_name, team_id=team_id)
             db.add(user)
         await db.commit()
         await db.refresh(user)
