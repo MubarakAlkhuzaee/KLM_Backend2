@@ -4,9 +4,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..db import get_session
 from ..models import Team, User
 from ..schemas import TeamOut
-from ..config import settings
-from ..security import jwt
-from ..deps import get_current_user
 
 router = APIRouter(prefix="/teams", tags=["teams"])
 
