@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from authlib.integrations.starlette_client import OAuth
@@ -46,10 +45,27 @@ async def register(data: RegisterIn, db: AsyncSession = Depends(get_session)):
     return TokenOut(access_token=token)
 
 @router.post("/login", response_model=TokenOut)
-async def login(form: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_session)):
-    q = await db.execute(select(User).where(User.email == form.username))
+async def login(request: Request, db: AsyncSession = Depends(get_session)):
+    # Accept JSON {email,password} or form fields username/password
+    email = None
+    password = None
+    try:
+        if request.headers.get("content-type", "").startswith("application/json"):
+            body = await request.json()
+            email = (body or {}).get("email") or (body or {}).get("username")
+            password = (body or {}).get("password")
+        else:
+            form = await request.form()
+            email = form.get("username") or form.get("email")
+            password = form.get("password")
+    except Exception:
+        pass
+    if not email or not password:
+        raise HTTPException(422, "Missing credentials")
+
+    q = await db.execute(select(User).where(User.email == email))
     user = q.scalar_one_or_none()
-    if not user or not user.hashed_password or not verify_password(form.password, user.hashed_password):
+    if not user or not user.hashed_password or not verify_password(password, user.hashed_password):
         raise HTTPException(400, "Incorrect email or password")
     token = create_access_token(str(user.id))
     return TokenOut(access_token=token)
