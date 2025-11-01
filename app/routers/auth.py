@@ -14,35 +14,45 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 # --- Email/password ---
 @router.post("/register", response_model=TokenOut)
 async def register(data: RegisterIn, db: AsyncSession = Depends(get_session)):
-    # team_code optional on register; can be set later
-    exists = await db.execute(select(User).where(User.email == data.email))
-    if exists.scalar_one_or_none():
-        raise HTTPException(400, "Email already registered")
-    team_id = None
-    if data.team_code:
-        t = await db.execute(select(Team).where(Team.code == data.team_code))
-        team = t.scalar_one_or_none()
-        if not team:
-            raise HTTPException(400, "Invalid team code")
-        team_id = team.id
-    else:
-        # auto-assign a random team
-        teams = (await db.execute(select(Team))).scalars().all()
-        if teams:
-            import random
-            team_id = random.choice(teams).id
+    try:
+        # team_code optional on register; can be set later
+        exists = await db.execute(select(User).where(User.email == data.email))
+        if exists.scalar_one_or_none():
+            raise HTTPException(400, "Email already registered")
+        team_id = None
+        if data.team_code:
+            t = await db.execute(select(Team).where(Team.code == data.team_code))
+            team = t.scalar_one_or_none()
+            if not team:
+                raise HTTPException(400, "Invalid team code")
+            team_id = team.id
+        else:
+            # auto-assign a random team
+            teams_result = await db.execute(select(Team))
+            teams = teams_result.scalars().all()
+            if teams:
+                import random
+                team_id = random.choice(teams).id
+            # If no teams exist, team_id stays None (nullable field)
 
-    user = User(
-        email=data.email,
-        hashed_password=hash_password(data.password),
-        display_name=data.display_name,
-        team_id=team_id
-    )
-    db.add(user)
-    await db.commit()
-    await db.refresh(user)
-    token = create_access_token(str(user.id))
-    return TokenOut(access_token=token)
+        user = User(
+            email=data.email,
+            hashed_password=hash_password(data.password),
+            display_name=data.display_name,
+            team_id=team_id
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+        token = create_access_token(str(user.id))
+        return TokenOut(access_token=token)
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        print(f"Registration error: {e}")
+        print(traceback.format_exc())
+        raise HTTPException(500, f"Registration failed: {str(e)}")
 
 @router.post("/login", response_model=TokenOut)
 async def login(request: Request, db: AsyncSession = Depends(get_session)):
